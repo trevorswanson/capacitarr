@@ -92,6 +92,7 @@ type DiskGroupManager interface {
 type HealthReporter interface {
 	ReportFailure(id uint, err error)
 	ReportSuccess(id uint)
+	Refresh(id uint)
 }
 
 // IntegrationService manages integration CRUD, connection testing, and
@@ -475,6 +476,9 @@ func (s *IntegrationService) Create(config db.IntegrationConfig) (*db.Integratio
 	if err := s.db.Create(&config).Error; err != nil {
 		return nil, fmt.Errorf("failed to create integration: %w", err)
 	}
+	if s.healthReporter != nil {
+		s.healthReporter.Refresh(config.ID)
+	}
 
 	s.bus.Publish(events.IntegrationAddedEvent{
 		IntegrationID:   config.ID,
@@ -496,6 +500,9 @@ func (s *IntegrationService) Update(id uint, config db.IntegrationConfig) (*db.I
 	config.ID = id
 	if err := s.db.Save(&config).Error; err != nil {
 		return nil, fmt.Errorf("failed to update integration: %w", err)
+	}
+	if s.healthReporter != nil {
+		s.healthReporter.Refresh(config.ID)
 	}
 
 	s.bus.Publish(events.IntegrationUpdatedEvent{
@@ -556,6 +563,9 @@ func (s *IntegrationService) PartialUpdate(id uint, update IntegrationUpdate) (*
 
 	if err := s.db.Save(existing).Error; err != nil {
 		return nil, fmt.Errorf("failed to update integration: %w", err)
+	}
+	if s.healthReporter != nil {
+		s.healthReporter.Refresh(existing.ID)
 	}
 
 	s.bus.Publish(events.IntegrationUpdatedEvent{

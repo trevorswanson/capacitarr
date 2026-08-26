@@ -403,18 +403,28 @@ func (h *IntegrationHealthService) recordSuccess(id uint) {
 // states map. Used when an external caller reports a failure/success for an
 // integration that was added after the last seed.
 func (h *IntegrationHealthService) reloadIntegration(id uint) {
+	h.Refresh(id)
+}
+
+// Refresh synchronizes one integration's in-memory health state after it is
+// created or updated. Disabled integrations are removed, while enabled
+// integrations are made immediately eligible for the next health check.
+func (h *IntegrationHealthService) Refresh(id uint) {
+	// Keep the DB read and state replacement under one lock so concurrent
+	// integration updates cannot apply an older DB snapshot after a newer one.
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	cfg, err := h.integrationSvc.GetByID(id)
 	if err != nil {
-		slog.Warn("Health: failed to reload integration from DB",
+		slog.Warn("Health: failed to refresh integration from DB",
 			"component", "health", "integrationID", id, "error", err)
 		return
 	}
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if _, exists := h.states[id]; exists {
-		return // already added by another goroutine
+	if !cfg.Enabled {
+		delete(h.states, id)
+		return
 	}
 
 	h.states[id] = &healthState{
@@ -426,7 +436,7 @@ func (h *IntegrationHealthService) reloadIntegration(id uint) {
 		Healthy:             cfg.LastError == "",
 		LastError:           cfg.LastError,
 		ConsecutiveFailures: cfg.ConsecutiveFailures,
-		NextCheck:           time.Now().Add(healthCheckInterval),
+		NextCheck:           time.Now(),
 	}
 }
 

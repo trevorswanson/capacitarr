@@ -443,6 +443,55 @@ func TestHealthService_HealthStatus_Empty(t *testing.T) {
 	}
 }
 
+func TestHealthService_RefreshesWhenIntegrationEnabledOrDisabled(t *testing.T) {
+	database := setupTestDB(t)
+	bus := newTestBus(t)
+	integrationSvc := NewIntegrationService(database, bus)
+
+	config := db.IntegrationConfig{
+		Type: "sonarr", Name: "Toggleable Sonarr", URL: "http://localhost:8989",
+		APIKey: "test-key", Enabled: false,
+	}
+	if err := database.Create(&config).Error; err != nil {
+		t.Fatal(err)
+	}
+	// The model's DB default is enabled=true, so force the deliberately
+	// disabled starting condition after creation.
+	if err := database.Model(&config).Update("enabled", false).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	healthSvc := NewIntegrationHealthService(integrationSvc, bus)
+	integrationSvc.SetHealthReporter(healthSvc)
+	healthSvc.seed()
+	initialTracked := healthSvc.TrackedCount()
+
+	enabled := true
+	if _, err := integrationSvc.PartialUpdate(config.ID, IntegrationUpdate{Enabled: &enabled}); err != nil {
+		t.Fatal(err)
+	}
+	if got := healthSvc.TrackedCount(); got != initialTracked+1 {
+		t.Fatalf("expected enabled integration to be tracked; got %d entries, want %d", got, initialTracked+1)
+	}
+	if !healthSvc.IsHealthy(config.ID) {
+		t.Fatal("expected newly enabled integration to be eligible for polling")
+	}
+	if !healthSvc.HealthyIDs()[config.ID] {
+		t.Fatal("expected newly enabled integration in the healthy-ID polling set")
+	}
+
+	disabled := false
+	if _, err := integrationSvc.PartialUpdate(config.ID, IntegrationUpdate{Enabled: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	if got := healthSvc.TrackedCount(); got != initialTracked {
+		t.Fatalf("expected disabled integration to be removed from health tracking; got %d entries, want %d", got, initialTracked)
+	}
+	if healthSvc.HealthyIDs()[config.ID] {
+		t.Fatal("expected disabled integration absent from the healthy-ID polling set")
+	}
+}
+
 // --------------------------------------------------------------------------
 // Recovery event: IntegrationRecoveryAttemptEvent
 // --------------------------------------------------------------------------
